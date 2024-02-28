@@ -1,79 +1,81 @@
+import csv
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-import pandas as pd
-import numpy as np
 
-# Carregar os dados dos arquivos CSV
-buy = pd.read_csv('base/Buy.csv')
-abt = pd.read_csv('base/Abt.csv')
+# Função para tokenizar e calcular a similaridade entre os tokens
 
-# Preencher valores nulos na coluna de preço com a média
-buy['price'] = pd.to_numeric(buy['price'], errors='coerce')
-buy['price'].fillna(buy['price'].mean(), inplace=True)
-abt['price'] = pd.to_numeric(abt['price'], errors='coerce')
-abt['price'].fillna(abt['price'].mean(), inplace=True)
 
-# Substituir valores nulos nas colunas de texto por uma string vazia
-buy['name'].fillna('', inplace=True)
-buy['description'].fillna('', inplace=True)
-abt['name'].fillna('', inplace=True)
-abt['description'].fillna('', inplace=True)
+def calculate_similarity(items_a, items_b):
+    tfidf_vectorizer = TfidfVectorizer()
+    tfidf_matrix_a = tfidf_vectorizer.fit_transform(items_a)
+    tfidf_matrix_b = tfidf_vectorizer.transform(items_b)
+    similarity_matrix = cosine_similarity(tfidf_matrix_a, tfidf_matrix_b)
+    return similarity_matrix
 
-# Tokenização e Vetorização para Buy.csv
-tfidf_vectorizer_buy = TfidfVectorizer()
-tfidf_matrix_buy = tfidf_vectorizer_buy.fit_transform(
-    buy['name'] + ' ' + buy['description'])
+# Leitura dos arquivos CSV
 
-# Cálculo da Similaridade de Cosseno para Buy.csv
-cosine_sim_buy = cosine_similarity(tfidf_matrix_buy, tfidf_matrix_buy)
+
+def read_csv(file_path, important_fields):
+    data = {}
+    with open(file_path, newline='', encoding='utf-8') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            item_id = row["id"]
+            item_data = " ".join([row[field] for field in important_fields])
+            data[item_id] = item_data
+    return data
+
+
+# Leitura dos arquivos Abt.csv e Buy.csv
+abt_data = read_csv('base/Abt.csv', ['name', 'description'])
+buy_data = read_csv('base/Buy.csv', ['name', 'description'])
+
+# Tokenização e cálculo da similaridade
+abt_items = list(abt_data.values())
+buy_items = list(buy_data.values())
+similarity_matrix = calculate_similarity(abt_items, buy_items)
 
 # Definição de um limiar de similaridade
-threshold = 0.8
+# 0.8 - Precisão 100% 1.0, baixissima revocação 0.02, F-measure 0.04
+# 0.7 - Precisão alta 0.91, revocação 0.11, F-measure 0.2
+# 0.6 - Precisão 0.82, revocação 0.32, F-measure 0.46
+# 0.5 - Precisão 0.60, revocação 0.56, F-measure 0.58 - Melhor resultado
+# 0.55 - Precisão 0.71, revocação 0.44, F-measure 0.54
+# 0.4 - Precisão 0.35, revocação 0.76, F-measure 0.48
+threshold = 0.55
 
-# Identificação de Duplicatas em Buy.csv
-duplicates_buy = []
-for i in range(len(cosine_sim_buy)):
-    for j in range(i+1, len(cosine_sim_buy[i])):
-        if cosine_sim_buy[i][j] > threshold:
-            duplicates_buy.append(
-                (buy.iloc[i]['name'], buy.iloc[i]['description'], buy.iloc[j]['name'], buy.iloc[j]['description']))
+# Identificação das duplicatas potenciais
+duplicates = []
+for i, abt_item in enumerate(abt_items):
+    for j, buy_item in enumerate(buy_items):
+        if similarity_matrix[i][j] >= threshold:
+            duplicates.append(
+                (list(abt_data.keys())[i], list(buy_data.keys())[j]))
 
-# Tokenização e Vetorização para Abt.csv
-tfidf_vectorizer_abt = TfidfVectorizer()
-tfidf_matrix_abt = tfidf_vectorizer_abt.fit_transform(
-    abt['name'] + ' ' + abt['description'])
+# Escrita dos pares de IDs dos itens duplicados em um arquivo CSV
+with open('result.csv', mode='w', newline='', encoding='utf-8') as csvfile:
+    writer = csv.writer(csvfile)
+    writer.writerow(['abt_id', 'buy_id'])
+    for abt_id, buy_id in duplicates:
+        writer.writerow([abt_id, buy_id])
 
-# Cálculo da Similaridade de Cosseno para Abt.csv
-cosine_sim_abt = cosine_similarity(tfidf_matrix_abt, tfidf_matrix_abt)
+# Leitura do arquivo de mapeamento para validação
+validation_data = []
+with open('base/abt_buy_perfectMapping.csv', newline='', encoding='utf-8') as csvfile:
+    reader = csv.DictReader(csvfile)
+    for row in reader:
+        validation_data.append((row["idAbt"], row["idBuy"]))
 
-# Identificação de Duplicatas em Abt.csv
-duplicates_abt = []
-for i in range(len(cosine_sim_abt)):
-    for j in range(i+1, len(cosine_sim_abt[i])):
-        if cosine_sim_abt[i][j] > threshold:
-            duplicates_abt.append(
-                (abt.iloc[i]['name'], abt.iloc[i]['description'], abt.iloc[j]['name'], abt.iloc[j]['description']))
+# Validação das duplicatas
+true_positives = 0
+for abt_id, buy_id in duplicates:
+    if (abt_id, buy_id) in validation_data:
+        true_positives += 1
 
-# Função para exibir um par de duplicatas de forma mais legível
+precision = true_positives / len(duplicates) if len(duplicates) > 0 else 0
+recall = true_positives / \
+    len(validation_data) if len(validation_data) > 0 else 0
+f_measure = 2 * (precision * recall) / (precision +
+                                        recall) if (precision + recall) > 0 else 0
 
-
-def print_pair(pair):
-    print("Duplicata 1:")
-    print("Nome: " + pair[0])
-    print("Descrição: " + pair[1])
-    print("\n")
-    print("Duplicata 2:")
-    print("Nome: " + pair[2])
-    print("Descrição: " + pair[3])
-    print("\n")
-
-
-# Visualização das Duplicatas em Buy.csv
-print("Duplicatas em Buy.csv Identificadas:")
-for pair in duplicates_buy:
-    print_pair(pair)
-
-# Visualização das Duplicatas em Abt.csv
-print("\nDuplicatas em Abt.csv Identificadas:")
-for pair in duplicates_abt:
-    print_pair(pair)
+print(f"Precision: {precision}, Recall: {recall}, F-Measure: {f_measure}")
